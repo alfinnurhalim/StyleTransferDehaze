@@ -15,7 +15,7 @@ img_h: 256
 
 n_flow: 6
 
-n_block: 3
+n_block: 2
 
 no_lu: False
 
@@ -28,9 +28,9 @@ stage: 2
 
 batch_size: 4
 
-aug: False
+aug: True
 
-lr: 0.0002
+lr: 0.00005
 
 lr_decay: 0.0005
 
@@ -44,16 +44,18 @@ eval: [test]
 
 #============ Loss STAGE 2 ============
 
-style_weight: 0
+style_weight: 1
 
-content_weight: 1
+content_weight: 0
 
-recon_weight: 0
+recon_weight: 0.05
 
-smooth_weight: 0
+smooth_weight: 10
 
 scm_weight: 0
 
-p_weight: 1
+p_weight: 0
+
+keep_ratio: 0.8
 
 loss: tv_loss 

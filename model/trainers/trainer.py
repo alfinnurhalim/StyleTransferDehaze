@@ -78,9 +78,9 @@ class merge_model(nn.Module):
         )
         # self.refiner = Refiner(in_channels=3)
 
-    def forward(self, content_images):
+    def forward(self, content_images,style_code):
         z_c = self.glow(content_images, forward=True)
-        stylized = self.glow(z_c, forward=False)
+        stylized = self.glow(z_c, forward=False, style=style_code)
 
         # stylized = self.refiner(stylized)
         return stylized
@@ -128,7 +128,6 @@ class Trainer:
 
         self.encoder = net.Net(vgg).cuda()
 
-        # Smoothness regularization
         self.tv_loss = TVLoss().cuda()
 
         # Logging paths
@@ -178,30 +177,21 @@ class Trainer:
             print("Optimizer state loaded\n")
 
 
-    def train(self, batch_id, content_imgs, gt_imgs, epoch):
+    def train(self, batch_id, content_imgs, style_imgs, epoch):
         content = content_imgs.cuda()
-        gt = gt_imgs.cuda()
+        style = style_imgs.cuda()
 
-        stylized = self.model(content)
+        style_code = self.encoder.cat_tensor(style)
+        stylized = self.model(content,style_code)
         stylized = torch.clamp(stylized, 0, 1)
 
         # Smoothness loss
         loss_smooth = self.tv_loss(stylized)
 
-        loss_c, loss_s, loss_r, loss_p = self.encoder(content, stylized, gt)
-        # loss_p = self.encoder(content, stylized, gt)
+        loss_c, loss_s, loss_r, loss_p = self.encoder(content, style, stylized, keep_ratio=self.cfg.get('keep_ratio', 0.5))
         
         # stage 1 loss
-        loss_scm = 0.0
-        for block in self.model.glow.blocks:
-          if hasattr(block, 'last_delta_mu') and block.last_delta_mu is not None:
-              delta_mu = block.last_delta_mu
-              delta_std = block.last_delta_std
-
-              # L2 regularization to push deltas toward zero
-              loss_mu = (delta_mu ** 2).mean()
-              loss_std = (delta_std ** 2).mean()
-              loss_scm += (loss_mu + loss_std)
+        loss_scm = torch.zeros_like(loss_r)
 
         loss_c = loss_c.mean() * self.cfg.get('content_weight', 1.0)
         loss_s = loss_s.mean() * self.cfg.get('style_weight', 1e-4)
@@ -223,7 +213,7 @@ class Trainer:
         if batch_id % self.cfg.get('log_freq', 100) == 0:
             fname = f"{epoch}_{batch_id}.jpg"
             out = torch.cat([
-                content[-1:], stylized[-1:], gt[-1:]
+                content[-1:], stylized[-1:], style[-1:]
             ], dim=3)
             save_image(out.cpu(), os.path.join(self.img_log_path, fname))
 
@@ -253,12 +243,13 @@ class Trainer:
             loss_scm.item()
         ]
 
-    def test(self, epoch, batch_id, content_imgs, gt_imgs, len_data=1000, suffix=''):
+    def test(self, epoch, batch_id, content_imgs, style_imgs, gt_imgs, len_data=1000, suffix=''):
         content = content_imgs.cuda()
+        style = style_imgs.cuda()
         gt = gt_imgs.cuda()
 
-        # style_code, mu, logvar = self.encoder.style_encoder(style)
-        stylized = self.model(content)
+        style_code = self.encoder.cat_tensor(style)
+        stylized = self.model(content,style_code)
         stylized = torch.clamp(stylized, 0, 1)
 
         total_psnr = 0
@@ -311,7 +302,7 @@ class Trainer:
             count += 1
         
             out = torch.cat([
-                content[i:i+1], stylized[i:i+1], gt[i:i+1]
+                content[i:i+1], style[i:i+1], stylized[i:i+1], gt[i:i+1]
             ], dim=3)
             name = f"{suffix}_epoch{epoch}_batch{batch_id}_idx{i}.jpg"
             save_image(out.cpu(), os.path.join(self.img_test_path, name))
@@ -332,44 +323,3 @@ class Trainer:
             },step=epoch)
 
         return avg_psnr,avg_ssim
-
-    def eval(self, epoch, batch_id, content_imgs, gt_imgs, filenames, suffix='eval'):
-        content = content_imgs.cuda()
-        gt = gt_imgs.cuda()
-
-        stylized = self.model(content)
-        stylized = torch.clamp(stylized, 0, 1)
-
-        # === Attention maps ===
-        if self.cfg.get('attention') is not None:
-            for block_idx, block in enumerate(self.model.glow.blocks):
-                if hasattr(block, 'last_attention'):
-                    attn_maps = block.last_attention
-                    for img_idx in range(attn_maps.shape[0]):
-                        attn_overlay = logger.overlay_attention_on_image(
-                            attn_maps[img_idx], content[img_idx]
-                        )
-                        save_name = f"{suffix}_epoch{epoch}_batch{batch_id}_idx{img_idx}_attn_block{block_idx}.jpg"
-                        save_path = os.path.join(self.img_att_path, save_name)
-                        cv2.imwrite(save_path, cv2.cvtColor(attn_overlay, cv2.COLOR_RGB2BGR))
-
-        # === Save result & GT ===
-        result_dir = os.path.join(self.img_test_path, 'eval_result')
-        os.makedirs(result_dir, exist_ok=True)
-
-        for i in range(content.size(0)):
-            base_name = os.path.splitext(os.path.basename(filenames[i]))[0]
-
-            # Save result
-            result_path = os.path.join(result_dir, f"{base_name}.jpg")
-            save_image(stylized[i].cpu(), result_path)
-
-            # Save GT
-            gt_path = os.path.join(result_dir, f"gt_{base_name}.jpg")
-            save_image(gt[i].cpu(), gt_path)
-
-            # Save preview (optional visualization)
-            preview = torch.cat([content[i:i+1], stylized[i:i+1], gt[i:i+1]], dim=3)
-            preview_path = os.path.join(self.img_test_path, f"{base_name}_cat.jpg")
-            save_image(preview.cpu(), preview_path)
-

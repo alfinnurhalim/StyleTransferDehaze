@@ -96,7 +96,9 @@ class Block(nn.Module):
         # print('the in channel:',in_channel)
         squeeze_dim = in_channel * squeeze
         self.flows = nn.ModuleList()
-        self.modulate = SelfConditionedModulation(squeeze_dim, return_delta=True)
+        self.modulate = SelfConditionedModulation(squeeze_dim,
+                                                style_dim=1920,
+                                                return_delta=True)
 
         self.spatial_attn = SpatialAttention()
         self.channel_attn = ChannelAttention(squeeze_dim, reduction=squeeze)
@@ -120,13 +122,12 @@ class Block(nn.Module):
 
         return out
 
-    def reverse(self, output, alpha=True):
-        input = output
+    def reverse(self, z, style, alpha=True):
 
         if alpha:
             # Channel & spatial attention
-            ch_att = self.channel_attn(input)
-            input_attn = input * ch_att
+            ch_att = self.channel_attn(z)
+            input_attn = z * ch_att
 
             sp_att = self.spatial_attn(input_attn)
             input_attn = input_attn * sp_att
@@ -136,25 +137,25 @@ class Block(nn.Module):
             # Save attention mask as soft gate
             soft_gate = sp_att  # shape: [B, 1, H, W]
         else:
-            input_attn = input
-            soft_gate = torch.zeros_like(input[:, :1, :, :])  # dummy gate (no modulation)
+            input_attn = z
+            soft_gate = torch.zeros_like(z[:, :1, :, :])  # dummy gate (no modulation)
 
         # Apply modulation
-        mod_input, d_mean, d_var = self.modulate(input_attn,input)
+        mod_input, d_mean, d_var = self.modulate(input_attn,style)
 
         self.last_delta_mu = d_mean
         self.last_delta_std = d_var
 
         # Soft-gating: combine original and modulated input
-        input = input * (1 - soft_gate) + mod_input * soft_gate
+        z = z * (1 - soft_gate) + mod_input * soft_gate
 
         # Decode through flow
         for flow in reversed(self.flows):
-            input = flow.reverse(input)
+            z = flow.reverse(z)
 
         # 5. Un-squeeze back to spatial dimensions
-        b_size, n_channel, height, width = input.shape
-        unsqueezed = input.view(b_size, n_channel // 4, 2, 2, height, width)
+        b_size, n_channel, height, width = z.shape
+        unsqueezed = z.view(b_size, n_channel // 4, 2, 2, height, width)
         unsqueezed = unsqueezed.permute(0, 1, 4, 2, 5, 3).contiguous()
         unsqueezed = unsqueezed.view(b_size, n_channel // 4, height * 2, width * 2)
 
@@ -174,11 +175,11 @@ class Glow(nn.Module):
         self.blocks.append(Block(n_channel, n_flow, affine=affine))
         
         
-    def forward(self, input, forward=True):
+    def forward(self, input, style=None, forward=True):
         if forward:
             return self._forward_set(input)
         else:
-            return self._reverse_set(input)
+            return self._reverse_set(input,style)
 
     def _forward_set(self, input):
         z = input
@@ -187,8 +188,8 @@ class Glow(nn.Module):
             z = block(z)
         return z
 
-    def _reverse_set(self, z):
+    def _reverse_set(self, z, style):
         out = z
         for i, block in enumerate(self.blocks[::-1]):
-            out = block.reverse(out,alpha=self.alpha)
+            out = block.reverse(out,style,alpha=self.alpha)
         return out

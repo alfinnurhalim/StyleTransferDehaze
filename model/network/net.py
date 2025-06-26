@@ -107,13 +107,18 @@ class Net(nn.Module):
             input = getattr(self, 'enc_{:d}'.format(i + 1))(input)
         return input
 
-    def calc_style_loss(self, input, target):
+    def calc_style_loss(self, input, target, keep_ratio=1):
+        # print(f'{input.size()} {target.size()}')
         assert (input.size() == target.size())
         assert (target.requires_grad is False)
         input_mean, input_std = calc_mean_std(input)
         target_mean, target_std = calc_mean_std(target)
 
-        loss_mean,loss_std = weighted_mse_loss_merge(input_mean,target_mean,input_std,target_std)
+        loss_mean,loss_std = weighted_mse_loss_merge(input_mean,
+                                                    target_mean,
+                                                    input_std,
+                                                    target_std, 
+                                                    keep_ratio=keep_ratio)
         return loss_mean+loss_std
     
     def calc_content_loss(self, input, target):
@@ -136,42 +141,43 @@ class Net(nn.Module):
         gram = torch.bmm(feat, feat.transpose(1, 2)) / (C * H * W)
         return gram
 
-    def forward(self, content_images, stylized_images, gt_images, weight=None):
+    def cat_tensor(self,img):
+        feat = self.encode_with_intermediate(img)
+        mean,std = calc_mean_std(feat[0])
+        mean = mean.squeeze(2)
+        mean = mean.squeeze(2)
+        std = std.squeeze(2)
+        std = std.squeeze(2)
+        t = torch.cat([mean,std],dim=1)
+        for i in range(1,len(feat)):
+            mean,std = calc_mean_std(feat[i])
+            mean = mean.squeeze(2)
+            mean = mean.squeeze(2)
+            std = std.squeeze(2)
+            std = std.squeeze(2)
+            t = torch.cat([t,mean,std],dim=1)
+        return t
 
-        # Encode layer by layer
+    def forward(self, content_images, style_images, stylized_images, keep_ratio=None):
+        content_feats = self.encode_with_intermediate(content_images)
+        style_feats = self.encode_with_intermediate(style_images)
         stylized_feats = self.encode_with_intermediate(stylized_images)
-        gt_feats = self.encode_with_intermediate(gt_images)
+
+        # print(content_feats[-1].shape)
+        # print(style_feats[-1].shape)
+        # print(stylized_feats[-1].shape)
 
         # Structure Loss
-        # loss_r = torch.zeros_like(loss_p)
         loss_r = 0
-        for i in range(2):
-            loss_r += self.calc_content_loss(stylized_feats[i], gt_feats[i])
+        # for i in range(2):
+        loss_r += self.calc_content_loss(stylized_feats[-1], content_feats[-1])
 
-        # Preserving structure between Output anf Input
-        # loss_c = torch.zeros_like(loss_r)
-        loss_c = 0 #torch.zeros_like(loss_r)
-        for i in range(2):
-            loss_c += F.l1_loss(stylized_feats[i], gt_feats[i])
-        
-        # Stle Loss
-        # loss_s = torch.zeros_like(loss_r)
+        # Style Loss
         loss_s = 0
-        for i in range(2):
-            loss_s += self.calc_style_loss(stylized_feats[i], gt_feats[i])
+        for i in range(4):
+            loss_s += self.calc_style_loss(stylized_feats[i], style_feats[i],keep_ratio=keep_ratio)
 
-        # loss gram
-        # loss_s = 0
-        # for i in range(4): 
-        #     gram_s = self.gram_matrix(stylized_feats[i])
-        #     gram_gt = self.gram_matrix(gt_feats[i])
-        #     loss_s += F.mse_loss(gram_s, gram_gt)
-
-        # Evaluating the output vs GT
-        loss_p = F.l1_loss(stylized_images,gt_images)
+        loss_c = torch.zeros_like(loss_r)
+        loss_p = torch.zeros_like(loss_r)
 
         return loss_c, loss_s, loss_r, loss_p
-
-
-
-

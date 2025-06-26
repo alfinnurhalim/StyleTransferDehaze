@@ -3,17 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class SelfConditionedModulation(nn.Module):
-    """
-    Self-conditioned normalization and modulation block:
-    - Learns per-channel mean/variance from content features
-    - Applies modulation (normed * var + mean)
-    - Blends with stylized features using external attention map
-    """
-    def __init__(self, in_channels, return_delta=False, hidden_channels=None):
+    def __init__(self, in_channels, return_delta=False, hidden_channels=None, style_dim=None, detach_original=True):
         super().__init__()
         hidden_channels = hidden_channels or in_channels // 2
+        style_dim = style_dim or hidden_channels
 
-        # Content encoder: Conv -> IN -> GAP -> Conv1x1
+        self.return_delta = return_delta
+        self.detach_original = detach_original
+
+        # === Content Feature Encoder ===
         self.content_encoder = nn.Sequential(
             nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1),
             nn.InstanceNorm2d(hidden_channels, affine=False),
@@ -22,55 +20,64 @@ class SelfConditionedModulation(nn.Module):
             nn.ReLU()
         )
 
-        # Projection MLP
-        self.projector = nn.Sequential(
+        self.content_projector = nn.Sequential(
             nn.Linear(hidden_channels, hidden_channels),
             nn.ReLU(),
             nn.Linear(hidden_channels, hidden_channels),
             nn.ReLU()
         )
 
-        # Heads for modulation stats
-        self.mean_head = nn.Sequential(
-            nn.Linear(hidden_channels, in_channels),
+        # === Style Feature Projector ===
+        self.style_projector = nn.Sequential(
+            nn.Linear(style_dim, hidden_channels),
             nn.ReLU(),
-            nn.Linear(in_channels, in_channels)
+            nn.Linear(hidden_channels, hidden_channels),
+            nn.ReLU()
         )
 
-        self.var_head = nn.Sequential(
-            nn.Linear(hidden_channels, in_channels),
+        # === Mixing Module ===
+        mix_dim = 2 * hidden_channels
+        self.mix_block = nn.Sequential(
+            nn.Linear(mix_dim, mix_dim),
             nn.ReLU(),
-            nn.Linear(in_channels, in_channels)
+            nn.Linear(mix_dim, mix_dim),
+            nn.ReLU()
         )
 
-        self.return_delta = return_delta
+        # === Output Modulation Heads ===
+        self.mean_head = nn.Linear(mix_dim, in_channels)
+        self.var_head = nn.Linear(mix_dim, in_channels)
 
-    def forward(self, content, original):
+    def forward(self, content, style_code):
         B, C, H, W = content.shape
+        original = content.clone().detach() if self.detach_original else content
 
-        # Compute base mean and std from content
-        base_mean = content.mean(dim=[2, 3], keepdim=True)  # [B, C, 1, 1]
-        base_std = content.std(dim=[2, 3], keepdim=True) + 1e-6
+        # === Stats from original (pre-modulation) ===
+        mean = original.mean(dim=[2, 3], keepdim=True)
+        std = original.std(dim=[2, 3], keepdim=True) + 1e-6
 
-        original_mean = original.mean(dim=[2, 3], keepdim=True)  # [B, C, 1, 1]
-        original_std = original.std(dim=[2, 3], keepdim=True) + 1e-6
+        # === Encode content ===
+        content_encoded = self.content_encoder(content).view(B, -1)
+        content_proj = self.content_projector(content_encoded)
 
-        # Encode and project for modulation deltas
-        encoded = self.content_encoder(content).view(B, -1)
-        proj = self.projector(encoded)
+        # === Encode style code ===
+        style_proj = self.style_projector(style_code)
 
-        d_mean = self.mean_head(proj).view(B, C, 1, 1)
-        d_var = self.var_head(proj).view(B, C, 1, 1)
+        # === Mix ===
+        mix = torch.cat([content_proj, style_proj], dim=1)
+        mixed = self.mix_block(mix)
 
-        # Apply deltas on base stats
-        modulated_mean = base_mean + d_mean
-        modulated_var = base_std + F.softplus(d_var)  # ensure positivity
+        # === Residual AdaIN outputs ===
+        d_mean = self.mean_head(mixed).view(B, C, 1, 1)
+        d_var = self.var_head(mixed).view(B, C, 1, 1)
 
-        # Normalize and apply affine modulation
-        normed = (original - original_mean)/original_std # self.norm(content)
-        out = normed * modulated_var + modulated_mean
+        mod_mean = mean + d_mean
+        mod_std = std + F.softplus(d_var)
+
+        # === Normalize and Modulate ===
+        normed = (original - mean) / std
+        out = normed * mod_std + mod_mean
 
         if self.return_delta:
-          out = (out,d_mean,d_var)
-
+            return out, d_mean, d_var
         return out

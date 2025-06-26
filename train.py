@@ -14,9 +14,9 @@ from logger import TrainingLogger
 
 code_name = 'Dataset_OHAZE'
 root_dir = f'./dataset/Dataset_OHAZE'
-cfg_path = f'./config/Dataset_OHAZE_1_6.yaml'
+cfg_path = f'./config/Dataset_OHAZE.yaml'
 
-wandb_project = 'TESIS_CLEAN'
+wandb_project = 'TESIS_PAPER'
 
 args = get_config(cfg_path)
 args['cfg_path'] = cfg_path
@@ -41,13 +41,17 @@ train_dataset_mixed = ImagePairDataset(root_dir=root_dir,
                                         phase='train',
                                         augment=args['aug'],
                                         stage=args['stage'],
-                                        img_size=img_size)
+                                        img_size=img_size,
+                                        pairing='mix')
 
 test_dataset_mixed = ImagePairDataset(root_dir=root_dir, 
                                         phase='test',
                                         augment=False, 
+                                        return_gt=True,
                                         stage=args['stage'],
-                                        img_size=img_size)
+                                        img_size=img_size,
+                                        pairing='direct',
+                                        )
 
 print(f'\n\nTrain Dataset : {len(train_dataset_mixed)}')
 print(f'Test Dataset : {len(test_dataset_mixed)}\n\n')
@@ -64,9 +68,6 @@ trainer = Trainer(args)
 if resume is not None:
   trainer.load_model(resume,flow_only=False)
 
-# if args['stage']==2:
-#   trainer.model.freeze_flow_train_modulation()
-
 training_logger = TrainingLogger(trainer.log_path)
 
 for epoch in range(args['total_epoch']):
@@ -75,23 +76,12 @@ for epoch in range(args['total_epoch']):
                         desc=f"Epoch {epoch}")
 
     last_loss = None
-    for batch_id, (source_image, gt_image) in progress_bar:
-        loss_list = trainer.train(batch_id, source_image, gt_image, epoch)
+    for batch_id, (source_image, style_image) in progress_bar:
+        loss_list = trainer.train(batch_id, source_image, style_image, epoch)
         
         loss,loss_c,loss_s,loss_r,loss_p,loss_smooth,loss_scm = loss_list if loss_list is not None else [0,0,0,0,0]
 
         last_loss = loss  # Update last_loss continuously
-
-        if loss_list is not None and wandb_key is not None:
-            wandb.log({
-                'train/loss_total': loss,
-                'train/loss_content': loss_c,
-                'train/loss_style': loss_s,
-                'train/loss_restoration': loss_r,
-                'train/loss_pixel': loss_p,
-                'train/loss_smooth': loss_smooth,
-                'train/loss_scm': loss_scm,
-            },step=epoch)
 
         progress_bar.set_postfix({'Loss': f'{loss:.4f}',
                                   'Loss_c': f'{loss_c:.4f}',
@@ -101,58 +91,43 @@ for epoch in range(args['total_epoch']):
                                   'Loss_smooth': f'{loss_smooth:.4f}',
                                   'loss_scm': f'{loss_scm:.4f}'})
 
+    if loss_list is not None and wandb_key is not None:
+            wandb.log({
+                'train/loss_total': loss,
+                'train/loss_content': loss_c,
+                'train/loss_style': loss_s,
+                'train/loss_restoration': loss_r,
+                'train/loss_pixel': loss_p,
+                'train/loss_smooth': loss_smooth,
+                'train/loss_scm': loss_scm,
+            },step=epoch)
+            
     if last_loss is not None:
         training_logger.log_epoch_loss(epoch, last_loss)
 
     print(f"\nEpoch: {epoch} - Last Batch Loss: {last_loss:.4f}")
 
     if epoch%10 == 0:
-      if 'train' in args['eval']:
-        print('\n\nTesting on train set ......')
-        avg_psnr = []
-        avg_ssim = []
-        test_bar = tqdm(enumerate(train_loader_mixed),
-                          total=len(train_loader_mixed),
-                          desc=f"Epoch {epoch}")
-        for batch_id, (source_image, gt_image) in test_bar:
-            psnr,ssim = trainer.test(epoch, batch_id, source_image, gt_image)
-            avg_psnr.append(psnr)
-            avg_ssim.append(ssim)
+      print('\n\nTesting on test set ......')
+      avg_psnr = []
+      avg_ssim = []
+      test_bar = tqdm(enumerate(test_loader_mixed),
+                        total=len(test_loader_mixed),
+                        desc=f"Epoch {epoch}")
+      for batch_id, (source_image, style_image, gt_image) in test_bar:
+          psnr,ssim = trainer.test(epoch, batch_id, source_image,style_image, gt_image, len_data=len(test_loader_mixed))
+          avg_psnr.append(psnr)
+          avg_ssim.append(ssim)
 
-        avg_psnr = sum(avg_psnr)/len(avg_psnr)
-        avg_ssim = sum(avg_ssim)/len(avg_ssim)
+      avg_psnr = sum(avg_psnr)/len(avg_psnr)
+      avg_ssim = sum(avg_ssim)/len(avg_ssim)
 
-        print(f"\nEpoch: {epoch} - TRAINING Avg PSNR: {avg_psnr:.4f}, Avg SSIM: {avg_ssim:.4f} ")
-        if wandb_key is not None:
-            wandb.log({
-                'train/psnr': avg_psnr,
-                'train/ssim': avg_ssim
-            },step=epoch)
-
-      if 'test' in args['eval']:
-          print('\n\nTesting on test set ......')
-          avg_psnr = []
-          avg_ssim = []
-          test_bar = tqdm(enumerate(test_loader_mixed),
-                            total=len(test_loader_mixed),
-                            desc=f"Epoch {epoch}")
-          for batch_id, (source_image, gt_image) in test_bar:
-              psnr,ssim = trainer.test(epoch, batch_id, source_image, gt_image, len_data=len(test_loader_mixed))
-              avg_psnr.append(psnr)
-              avg_ssim.append(ssim)
-
-          avg_psnr = sum(avg_psnr)/len(avg_psnr)
-          avg_ssim = sum(avg_ssim)/len(avg_ssim)
-
-          print(f"\nEpoch: {epoch} - TEST Avg PSNR: {avg_psnr:.4f}, Avg SSIM: {avg_ssim:.4f} ")
-          if wandb_key is not None:
-              wandb.log({
-                  'test/psnr': avg_psnr,
-                  'test/ssim': avg_ssim
-              },step=epoch)
-
-    # using wandb
-    # training_logger.update_graph()
+      print(f"\nEpoch: {epoch} - TEST Avg PSNR: {avg_psnr:.4f}, Avg SSIM: {avg_ssim:.4f} ")
+      if wandb_key is not None:
+          wandb.log({
+              'test/psnr': avg_psnr,
+              'test/ssim': avg_ssim
+          },step=epoch)
 
     print('\n\n')
 
