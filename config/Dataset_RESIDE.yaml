@@ -1,0 +1,43 @@
+job_name: Dataset_RESIDE
+
+output: ./output/
+
+vgg: ./model/vgg_normalised.pth
+
+resume: 
+
+#============ Net Architecture ============
+n_flow: 10
+
+n_block: 2
+
+no_lu: False
+
+affine: False
+#============ Training ============
+batch_size: 1
+
+lr: 0.0001
+
+lr_decay: 0.00005
+
+lr_steps: [40000,80000,120000]
+
+lr_mults: 0.5
+
+total_epoch: 9000
+
+
+#============ Loss ============
+
+style_weight: 0.8
+
+content_weight: 0.5
+
+recon_weight: 1
+
+smooth_weight: 2
+
+keep_ratio : 0.7
+
+loss: tv_loss
