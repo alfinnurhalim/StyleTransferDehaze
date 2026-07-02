@@ -11,9 +11,6 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from model.trainers.trainer import Trainer
-from model.utils.utils import get_config
-
 
 IMG_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff'}
 
@@ -48,8 +45,12 @@ def main():
     parser.add_argument('--reference', required=True, help='Clear reference/GT image used for style code.')
     parser.add_argument('--output-root', default='./output/rtts_dehazed')
     parser.add_argument('--limit', type=int, default=None)
+    parser.add_argument('--batch-size', type=int, default=1, help='Number of RTTS images to dehaze per forward pass.')
     parser.add_argument('--force', action='store_true', help='Regenerate dehazed images even if outputs already exist.')
     args = parser.parse_args()
+
+    from model.trainers.trainer import Trainer
+    from model.utils.utils import get_config
 
     cfg = get_config(args.config)
     cfg['cfg_path'] = args.config
@@ -79,23 +80,33 @@ def main():
     if skipped:
         print(f'Skipping {skipped} existing dehazed images. Use --force to regenerate.')
 
+    batch_size = max(1, args.batch_size)
     with torch.no_grad():
         style_code = trainer.encoder.cat_tensor(reference)
-        for stem, path, out_path in tqdm(pending, desc=f'Dehaze RTTS {args.split}'):
-            original = Image.open(path).convert('RGB')
-            source = original.resize(model_size, Image.BICUBIC)
-            source_tensor = transforms.ToTensor()(source).unsqueeze(0).cuda()
+        for start in tqdm(range(0, len(pending), batch_size), desc=f'Dehaze RTTS {args.split}'):
+            batch = pending[start:start + batch_size]
+            originals = []
+            tensors = []
+            for _, path, _ in batch:
+                original = Image.open(path).convert('RGB')
+                source = original.resize(model_size, Image.BICUBIC)
+                originals.append(original)
+                tensors.append(transforms.ToTensor()(source))
 
+            source_tensor = torch.stack(tensors, dim=0).cuda()
+            batch_style = style_code.expand(source_tensor.size(0), -1)
             z_c = trainer.model.glow(source_tensor, forward=True)
-            output = trainer.model.glow(z_c, forward=False, style=style_code)
-            output = torch.clamp(output, 0, 1).cpu()
-            output = torch.nn.functional.interpolate(
-                output,
-                size=(original.height, original.width),
-                mode='bilinear',
-                align_corners=False,
-            )
-            save_image(output[0], out_path)
+            outputs = trainer.model.glow(z_c, forward=False, style=batch_style)
+            outputs = torch.clamp(outputs, 0, 1).cpu()
+
+            for output, original, (_, _, out_path) in zip(outputs, originals, batch):
+                output = torch.nn.functional.interpolate(
+                    output.unsqueeze(0),
+                    size=(original.height, original.width),
+                    mode='bilinear',
+                    align_corners=False,
+                )
+                save_image(output[0], out_path)
 
     print(f'Saved {len(pending)} new dehazed images to {out_dir}')
     print(f'Total requested images: {len(stems)}')

@@ -19,6 +19,7 @@ DEVICE="${DEVICE:-0}"
 LIMIT="${LIMIT:-}"
 YOLO_MODELS="${YOLO_MODELS:-yolov8n.pt yolov8s.pt yolov8m.pt}"
 FORCE_DEHAZE="${FORCE_DEHAZE:-0}"
+DEHAZE_BATCH_SIZE="${DEHAZE_BATCH_SIZE:-1}"
 
 LIMIT_ARGS=()
 if [[ -n "$LIMIT" ]]; then
@@ -40,6 +41,7 @@ echo "dehazed   : $DEHAZED_ROOT"
 echo "results   : $RESULT_ROOT"
 echo "models    : $YOLO_MODELS"
 echo "device    : $DEVICE"
+echo "batch     : $DEHAZE_BATCH_SIZE dehaze image(s)"
 echo
 
 echo "=== Step 1: dehaze RTTS ==="
@@ -50,6 +52,7 @@ python experiments/rtts_yolov8/dehaze_rtts.py \
   --split "$SPLIT" \
   --reference "$REFERENCE" \
   --output-root "$DEHAZED_ROOT" \
+  --batch-size "$DEHAZE_BATCH_SIZE" \
   "${LIMIT_ARGS[@]}" \
   "${FORCE_ARGS[@]}"
 
