@@ -4,13 +4,14 @@ import os
 import cv2
 import shutil
 import wandb 
+import math
 
 import gdown
 
 import torch
 import torch.nn as nn
 from torchvision.utils import save_image
-from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, MultiStepLR
 
 import model.network.net as net
 from model.network.glow import Glow
@@ -144,6 +145,19 @@ class Trainer:
                 T_max=cfg.get('total_epoch', 1),
                 eta_min=cfg.get('lr_min', cfg['lr'] * 0.1),
             )
+        elif self.lr_scheduler_mode == 'cosine_warmup':
+            total_epoch = max(1, cfg.get('total_epoch', 1))
+            warmup_epoch = max(0, cfg.get('warmup_epoch', 0))
+            min_lr_ratio = cfg.get('lr_min', cfg['lr'] * 0.1) / cfg['lr']
+
+            def lr_lambda(epoch):
+                if warmup_epoch > 0 and epoch < warmup_epoch:
+                    return float(epoch + 1) / float(warmup_epoch)
+                progress = (epoch - warmup_epoch) / max(1, total_epoch - warmup_epoch)
+                cosine = 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+                return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+
+            self.lr_scheduler = LambdaLR(self.optimizer, lr_lambda=lr_lambda)
         elif self.lr_scheduler_mode == 'epoch_multistep':
             lr_mults = cfg.get('lr_mults', 0.5)
             gamma = lr_mults[0] if isinstance(lr_mults, list) else lr_mults

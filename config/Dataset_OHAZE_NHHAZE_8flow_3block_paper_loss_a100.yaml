@@ -1,0 +1,86 @@
+job_name: Dataset_OHAZE_NHHAZE_8flow_3block_paper_loss_a100
+
+root_dir: ./data/Dataset_OHAZE_NHHAZE
+
+output: ./output/
+
+vgg: ./vgg_normalised.pth
+
+vgg_drive_id: 15CeUI3FMgSFGSUPAldAzGAWAhMNL5iIO
+
+# Optional direct mirror. Leave empty when using vgg_drive_id or a local vgg path.
+vgg_url:
+
+resume:
+
+wandb:
+
+#============ Net Architecture ============
+img_w: 256
+
+img_h: 256
+
+n_flow: 8
+
+n_block: 3
+
+no_lu: False
+
+affine: False
+
+attention: CBAM
+
+#============ Training ============
+stage: 2
+
+# A100/Colab profile. Use 4 if your runtime is unexpectedly memory-limited.
+batch_size: 8
+
+aug: True
+
+train_pairing: paired
+
+test_pairing: paired
+
+lr: 0.0002
+
+lr_decay: 0.0005
+
+lr_scheduler: cosine_warmup
+
+warmup_epoch: 10
+
+lr_min: 0.000005
+
+lr_steps: [630]
+
+lr_mults: 0.5
+
+total_epoch: 250
+
+eval: [test]
+
+val_freq: 10
+
+test_freq: 10
+
+log_freq: 5
+
+save_freq: 50
+
+#============ Loss STAGE 2 ============
+recon_weight: 1.0
+
+content_weight: 0.1
+
+style_weight: 0
+
+smooth_weight: 0.001
+
+scm_weight: 0
+
+p_weight: 0
+
+keep_ratio: 1
+
+loss: tv_loss
