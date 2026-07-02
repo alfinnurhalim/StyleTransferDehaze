@@ -187,6 +187,34 @@ Summary outputs:
 output/xwod_yolo11_comparison/<prefix>/summary_plots/report.md
 ```
 
+## RTTS Downstream YOLOv8 Evaluation
+
+RTTS uses VOC XML annotations. The RTTS evaluator converts annotations to COCO format, maps COCO YOLOv8 predictions to RTTS classes, and reports mAP through `pycocotools`.
+
+Install the metric dependency if needed:
+
+```bash
+pip install pycocotools
+```
+
+Smoke test:
+
+```bash
+LIMIT=5 YOLO_MODELS="yolov8n.pt" DEVICE=0 bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh \
+  ./config/Dataset_NHHAZE_8flow_3block_paper_loss_cosine_tv001.yaml \
+  ./output/Dataset_NHHAZE_8flow_3block_paper_loss_cosine_tv001_120_100_8_3/model_save/epoch_110_val.pth.tar \
+  ./data/Dataset_NHHAZE/trainB/01_GT.png
+```
+
+Full YOLOv8 n/s/m comparison:
+
+```bash
+DEVICE=0 bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh \
+  ./config/Dataset_NHHAZE_8flow_3block_paper_loss_cosine_tv001.yaml \
+  ./output/Dataset_NHHAZE_8flow_3block_paper_loss_cosine_tv001_120_100_8_3/model_save/epoch_110_val.pth.tar \
+  ./data/Dataset_NHHAZE/trainB/01_GT.png
+```
+
 ## Notes
 
 - `data/`, `output/`, pretrained weights, checkpoints, archives, and generated metric files are ignored by git.
