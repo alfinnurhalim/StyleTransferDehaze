@@ -89,6 +89,20 @@ model_save/epoch_010_val.pth.tar
 ...
 ```
 
+The trainer also saves:
+
+```text
+model_save/last.pth.tar
+model_save/best_val_psnr.pth.tar
+model_save/best_val_ssim.pth.tar
+training_metrics.csv
+best_metrics.json
+plots/train_losses.png
+plots/learning_rate.png
+plots/psnr_curves.png
+plots/ssim_curves.png
+```
+
 ## Evaluate A Pretrained Model
 
 Download the pretrained checkpoint from the shared Google Drive link, then place it somewhere local, for example:

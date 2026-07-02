@@ -6,6 +6,10 @@ import argparse
 import csv
 import json
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import pandas as pd
 from tqdm import tqdm
 
 from torch.utils.data import DataLoader
@@ -55,6 +59,69 @@ def append_metrics_csv(path, row):
 def write_metrics_summary(path, summary):
     with open(path, 'w') as f:
         json.dump(summary, f, indent=2)
+
+
+def mean_losses(loss_rows):
+    arr = np.array(loss_rows, dtype=np.float64)
+    return {
+        'loss_total': float(arr[:, 0].mean()),
+        'loss_content': float(arr[:, 1].mean()),
+        'loss_style': float(arr[:, 2].mean()),
+        'loss_recon': float(arr[:, 3].mean()),
+        'loss_pixel': float(arr[:, 4].mean()),
+        'loss_smooth': float(arr[:, 5].mean()),
+        'loss_scm': float(arr[:, 6].mean()),
+    }
+
+
+def update_training_plots(log_path, train_metrics_path, validation_metrics_path, test_metrics_path):
+    plot_dir = os.path.join(log_path, 'plots')
+    os.makedirs(plot_dir, exist_ok=True)
+
+    if os.path.exists(train_metrics_path):
+        train_df = pd.read_csv(train_metrics_path)
+        if not train_df.empty:
+            plt.figure(figsize=(9, 5))
+            for col in ['loss_total', 'loss_recon', 'loss_content', 'loss_smooth']:
+                if col in train_df:
+                    plt.plot(train_df['epoch'], train_df[col], marker='o', label=col)
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title('Training Loss Curves')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(plot_dir, 'train_losses.png'), dpi=180)
+            plt.close()
+
+            plt.figure(figsize=(8, 4.5))
+            plt.plot(train_df['epoch'], train_df['lr'], marker='o')
+            plt.xlabel('Epoch')
+            plt.ylabel('Learning rate')
+            plt.title('Learning Rate Schedule')
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(plot_dir, 'learning_rate.png'), dpi=180)
+            plt.close()
+
+    metric_frames = []
+    for path in [validation_metrics_path, test_metrics_path]:
+        if os.path.exists(path):
+            metric_frames.append(pd.read_csv(path))
+    if metric_frames:
+        metrics_df = pd.concat(metric_frames, ignore_index=True)
+        for metric in ['psnr', 'ssim']:
+            plt.figure(figsize=(8, 4.5))
+            for split, group in metrics_df.groupby('split'):
+                plt.plot(group['epoch'], group[metric], marker='o', label=split)
+            plt.xlabel('Epoch')
+            plt.ylabel(metric.upper())
+            plt.title(f'{metric.upper()} Curves')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(os.path.join(plot_dir, f'{metric}_curves.png'), dpi=180)
+            plt.close()
 
 
 def evaluate_loader(trainer, loader, epoch, split_name, metrics_path, summary_path):
@@ -155,6 +222,11 @@ validation_metrics_path = os.path.join(trainer.log_path, 'validation_metrics.csv
 validation_summary_path = os.path.join(trainer.log_path, 'validation_latest.json')
 test_metrics_path = os.path.join(trainer.log_path, 'test_metrics.csv')
 test_summary_path = os.path.join(trainer.log_path, 'test_latest.json')
+train_metrics_path = os.path.join(trainer.log_path, 'training_metrics.csv')
+best_metrics_path = os.path.join(trainer.log_path, 'best_metrics.json')
+best_val_psnr = float('-inf')
+best_val_ssim = float('-inf')
+best_metrics = {}
 
 for epoch in range(args['total_epoch']):
     progress_bar = tqdm(enumerate(train_loader_mixed),
@@ -162,12 +234,14 @@ for epoch in range(args['total_epoch']):
                         desc=f"Epoch {epoch}")
 
     last_loss = None
+    epoch_loss_rows = []
     for batch_id, (source_image, style_image) in progress_bar:
         loss_list = trainer.train(batch_id, source_image, style_image, epoch)
         
         loss,loss_c,loss_s,loss_r,loss_p,loss_smooth,loss_scm = loss_list if loss_list is not None else [0,0,0,0,0]
 
         last_loss = loss  # Update last_loss continuously
+        epoch_loss_rows.append([loss, loss_c, loss_s, loss_r, loss_p, loss_smooth, loss_scm])
 
         progress_bar.set_postfix({'Loss': f'{loss:.4f}',
                                   'Loss_c': f'{loss_c:.4f}',
@@ -192,6 +266,14 @@ for epoch in range(args['total_epoch']):
         training_logger.log_epoch_loss(epoch, last_loss)
 
     print(f"\nEpoch: {epoch} - Last Batch Loss: {last_loss:.4f}")
+    train_row = {
+        'epoch': epoch,
+        'lr': trainer.get_lr(),
+        'last_loss': last_loss,
+    }
+    if epoch_loss_rows:
+        train_row.update(mean_losses(epoch_loss_rows))
+    append_metrics_csv(train_metrics_path, train_row)
 
     if val_loader_mixed is not None and val_freq > 0 and epoch % val_freq == 0:
       val_psnr, val_ssim = evaluate_loader(
@@ -212,6 +294,23 @@ for epoch in range(args['total_epoch']):
           epoch=epoch,
           metrics={'val_psnr': val_psnr, 'val_ssim': val_ssim},
       )
+      if val_psnr > best_val_psnr:
+          best_val_psnr = val_psnr
+          best_metrics['best_val_psnr'] = {'epoch': epoch, 'psnr': val_psnr, 'ssim': val_ssim}
+          trainer.save_model(
+              'best_val_psnr',
+              epoch=epoch,
+              metrics={'val_psnr': val_psnr, 'val_ssim': val_ssim},
+          )
+      if val_ssim > best_val_ssim:
+          best_val_ssim = val_ssim
+          best_metrics['best_val_ssim'] = {'epoch': epoch, 'psnr': val_psnr, 'ssim': val_ssim}
+          trainer.save_model(
+              'best_val_ssim',
+              epoch=epoch,
+              metrics={'val_psnr': val_psnr, 'val_ssim': val_ssim},
+          )
+      write_metrics_summary(best_metrics_path, best_metrics)
 
     if test_freq > 0 and epoch % test_freq == 0:
       test_psnr, test_ssim = evaluate_loader(
@@ -230,6 +329,8 @@ for epoch in range(args['total_epoch']):
 
     trainer.step_lr_scheduler()
     print(f"Learning rate after epoch {epoch}: {trainer.get_lr():.8f}")
+    trainer.save_model('last', epoch=epoch, metrics=train_row)
+    update_training_plots(trainer.log_path, train_metrics_path, validation_metrics_path, test_metrics_path)
 
     print('\n\n')
 

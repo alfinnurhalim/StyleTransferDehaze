@@ -284,15 +284,6 @@ class Trainer:
 
             print('saved at ',os.path.join(self.img_log_path, fname))
 
-        # Checkpointing 
-        if batch_id % self.cfg.get('save_freq', 500) == 0:
-            ckpt_name = self.cfg['job_name']
-            save_checkpoint(
-                {'state_dict': self.model.state_dict(),
-                 'optimizer': self.optimizer.state_dict()},
-                os.path.join(self.model_log_path, f"{ckpt_name}")
-            )
-
         return [
             total_loss.item(),
             loss_c.item(),
