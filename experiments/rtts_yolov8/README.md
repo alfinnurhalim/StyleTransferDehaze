@@ -8,7 +8,7 @@ Run a quick smoke test:
 LIMIT=5 YOLO_MODELS="yolov8n.pt" bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh
 ```
 
-Run the default comparison with YOLOv8 n/s/m:
+Run the default comparison with YOLOv8 n/s/m. The default YOLO image size is `250` for this experiment:
 
 ```bash
 bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh \
@@ -22,4 +22,10 @@ Outputs are written to:
 ```text
 output/rtts_dehazed
 output/rtts_yolov8_comparison
+```
+
+Existing dehazed RTTS images are skipped automatically. To regenerate them:
+
+```bash
+FORCE_DEHAZE=1 bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh ...
 ```

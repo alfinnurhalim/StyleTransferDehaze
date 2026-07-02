@@ -48,6 +48,7 @@ def main():
     parser.add_argument('--reference', required=True, help='Clear reference/GT image used for style code.')
     parser.add_argument('--output-root', default='./output/rtts_dehazed')
     parser.add_argument('--limit', type=int, default=None)
+    parser.add_argument('--force', action='store_true', help='Regenerate dehazed images even if outputs already exist.')
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -65,10 +66,22 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     stems = read_image_set(args.rtts_root, args.split, args.limit)
 
+    pending = []
+    skipped = 0
+    for stem in stems:
+        path = resolve_image(images_dir, stem)
+        out_path = out_dir / path.name
+        if out_path.exists() and not args.force:
+            skipped += 1
+            continue
+        pending.append((stem, path, out_path))
+
+    if skipped:
+        print(f'Skipping {skipped} existing dehazed images. Use --force to regenerate.')
+
     with torch.no_grad():
         style_code = trainer.encoder.cat_tensor(reference)
-        for stem in tqdm(stems, desc=f'Dehaze RTTS {args.split}'):
-            path = resolve_image(images_dir, stem)
+        for stem, path, out_path in tqdm(pending, desc=f'Dehaze RTTS {args.split}'):
             original = Image.open(path).convert('RGB')
             source = original.resize(model_size, Image.BICUBIC)
             source_tensor = transforms.ToTensor()(source).unsqueeze(0).cuda()
@@ -82,9 +95,10 @@ def main():
                 mode='bilinear',
                 align_corners=False,
             )
-            save_image(output[0], out_dir / path.name)
+            save_image(output[0], out_path)
 
-    print(f'Saved {len(stems)} dehazed images to {out_dir}')
+    print(f'Saved {len(pending)} new dehazed images to {out_dir}')
+    print(f'Total requested images: {len(stems)}')
 
 
 if __name__ == '__main__':

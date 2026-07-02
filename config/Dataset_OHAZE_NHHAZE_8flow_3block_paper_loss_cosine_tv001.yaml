@@ -1,4 +1,4 @@
-job_name: Dataset_OHAZE_NHHAZE_8flow_3block_paper_loss_cosine_tv001
+job_name: Dataset_OHAZE_NHHAZE_8flow_3block_paper_loss_cosine_tv001_120
 
 root_dir: ./data/Dataset_OHAZE_NHHAZE
 
@@ -53,7 +53,7 @@ lr_steps: [630]
 
 lr_mults: 0.5
 
-total_epoch: 70
+total_epoch: 120
 
 eval: [test]
 

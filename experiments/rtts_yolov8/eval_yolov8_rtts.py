@@ -149,7 +149,7 @@ def main():
     parser.add_argument('--output-dir', default='./output/rtts_yolov8_eval')
     parser.add_argument('--conf', type=float, default=0.001)
     parser.add_argument('--iou', type=float, default=0.7)
-    parser.add_argument('--imgsz', type=int, default=640)
+    parser.add_argument('--imgsz', type=int, default=250)
     parser.add_argument('--device', default=None, help='Ultralytics device, e.g. 0, cpu, cuda:0.')
     parser.add_argument('--limit', type=int, default=None)
     args = parser.parse_args()

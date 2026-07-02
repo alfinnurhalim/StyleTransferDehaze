@@ -14,14 +14,20 @@ RTTS_ROOT="${RTTS_ROOT:-./data/RTTS}"
 DEHAZED_ROOT="${DEHAZED_ROOT:-./output/rtts_dehazed}"
 RESULT_ROOT="${RESULT_ROOT:-./output/rtts_yolov8_comparison}"
 SPLIT="${SPLIT:-test}"
-IMG_SIZE="${IMG_SIZE:-640}"
+IMG_SIZE="${IMG_SIZE:-250}"
 DEVICE="${DEVICE:-0}"
 LIMIT="${LIMIT:-}"
 YOLO_MODELS="${YOLO_MODELS:-yolov8n.pt yolov8s.pt yolov8m.pt}"
+FORCE_DEHAZE="${FORCE_DEHAZE:-0}"
 
 LIMIT_ARGS=()
 if [[ -n "$LIMIT" ]]; then
   LIMIT_ARGS=(--limit "$LIMIT")
+fi
+
+FORCE_ARGS=()
+if [[ "$FORCE_DEHAZE" == "1" ]]; then
+  FORCE_ARGS=(--force)
 fi
 
 echo "=== RTTS YOLOv8 downstream experiment ==="
@@ -44,7 +50,8 @@ python experiments/rtts_yolov8/dehaze_rtts.py \
   --split "$SPLIT" \
   --reference "$REFERENCE" \
   --output-root "$DEHAZED_ROOT" \
-  "${LIMIT_ARGS[@]}"
+  "${LIMIT_ARGS[@]}" \
+  "${FORCE_ARGS[@]}"
 
 echo
 echo "=== Step 2: YOLOv8 original vs dehazed ==="

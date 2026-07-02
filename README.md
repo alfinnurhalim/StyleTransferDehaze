@@ -206,7 +206,7 @@ LIMIT=5 YOLO_MODELS="yolov8n.pt" DEVICE=0 bash experiments/rtts_yolov8/run_rtts_
   ./data/Dataset_NHHAZE/trainB/01_GT.png
 ```
 
-Full YOLOv8 n/s/m comparison:
+Full YOLOv8 n/s/m comparison. The RTTS runner defaults to `IMG_SIZE=250`:
 
 ```bash
 DEVICE=0 bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh \
@@ -214,6 +214,8 @@ DEVICE=0 bash experiments/rtts_yolov8/run_rtts_yolov8_comparison.sh \
   ./output/Dataset_NHHAZE_8flow_3block_paper_loss_cosine_tv001_120_100_8_3/model_save/epoch_110_val.pth.tar \
   ./data/Dataset_NHHAZE/trainB/01_GT.png
 ```
+
+The RTTS dehazing step skips existing outputs by default. Use `FORCE_DEHAZE=1` only when you want to regenerate dehazed images.
 
 ## Notes
 
