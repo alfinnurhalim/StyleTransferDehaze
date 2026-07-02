@@ -167,17 +167,15 @@ class Net(nn.Module):
         # print(style_feats[-1].shape)
         # print(stylized_feats[-1].shape)
 
-        # Structure Loss
-        loss_r = 0
-        # for i in range(2):
-        loss_r += self.calc_content_loss(stylized_feats[-1], content_feats[-1])
+        # Perceptual/content loss follows the paper objective: output vs paired GT.
+        loss_c = self.calc_content_loss(stylized_feats[-1], style_feats[-1])
 
         # Style Loss
         loss_s = 0
         for i in range(4):
             loss_s += self.calc_style_loss(stylized_feats[i], style_feats[i],keep_ratio=keep_ratio)
 
-        loss_c = torch.zeros_like(loss_r)
+        loss_r = F.l1_loss(stylized_images, style_images)
         loss_p = torch.zeros_like(loss_r)
 
         return loss_c, loss_s, loss_r, loss_p

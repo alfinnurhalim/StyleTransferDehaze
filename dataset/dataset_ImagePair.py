@@ -30,22 +30,38 @@ class ImagePairDataset(Dataset):
 
         if pairing == 'direct':
             self.pairs = list(product(range(len(self.hazy_files)), range(len(self.clear_files))))
+        elif pairing == 'paired':
+            if len(self.hazy_files) != len(self.clear_files):
+                raise ValueError(
+                    f"Paired mode requires equal file counts, got "
+                    f"{len(self.hazy_files)} hazy and {len(self.clear_files)} clear images."
+                )
+            self.pairs = list(zip(range(len(self.hazy_files)), range(len(self.clear_files))))
         else:
             self.pairs = None
 
         self.to_tensor = transforms.ToTensor()
 
     def __len__(self):
-        return len(self.pairs) if self.pairing == 'direct' else len(self.hazy_files)
+        return len(self.pairs) if self.pairing in ['direct', 'paired'] else len(self.hazy_files)
 
-    def load_img(self, path):
+    def get_aug_params(self):
+        return {
+            'flip': random.random() > 0.5,
+            'angle': random.choice([0, 90, 180, 270]),
+        }
+
+    def load_img(self, path, aug_params=None):
         img = Image.open(path).convert('RGB')
 
         if self.augment:
-            if random.random() > 0.5:
+            if aug_params is None:
+                aug_params = self.get_aug_params()
+
+            if aug_params['flip']:
                 img = img.transpose(Image.FLIP_LEFT_RIGHT)
 
-            angle = random.choice([0, 90, 180, 270])
+            angle = aug_params['angle']
             if angle != 0:
                 img = img.rotate(angle, expand=True)
 
@@ -53,7 +69,7 @@ class ImagePairDataset(Dataset):
         return self.to_tensor(img)
 
     def __getitem__(self, idx):
-        if self.pairing == 'direct':
+        if self.pairing in ['direct', 'paired']:
             i, j = self.pairs[idx]
         else:
             i = idx
@@ -62,12 +78,13 @@ class ImagePairDataset(Dataset):
         hazy_path = os.path.join(self.hazy_dir, self.hazy_files[i])
         clear_path = os.path.join(self.clear_dir, self.clear_files[j])
 
-        hazy_img = self.load_img(hazy_path)
-        clear_img = self.load_img(clear_path)
+        aug_params = self.get_aug_params() if self.augment and self.pairing == 'paired' else None
+        hazy_img = self.load_img(hazy_path, aug_params)
+        clear_img = self.load_img(clear_path, aug_params)
 
         if self.return_gt:
             gt_path = os.path.join(self.clear_dir, self.clear_files[i])
-            gt_img = self.load_img(gt_path)
+            gt_img = self.load_img(gt_path, aug_params)
             return hazy_img, clear_img, gt_img
 
         return hazy_img, clear_img

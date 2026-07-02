@@ -1,0 +1,59 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local datasets
+data/
+dataset/Dataset_*/
+Dense_Haze_NTIRE19/
+
+# Training outputs and experiment logs
+output/
+runs/
+wandb/
+weights/
+checkpoints/
+pretrained/
+*.out
+*.err
+*.log
+*.csv
+*.json
+
+# Model weights and checkpoints
+*.pth
+*.pt
+*.ckpt
+*.pth.tar
+*.tar
+*.onnx
+
+# Large dataset/archive artifacts
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.npy
+*.npz
+*.h5
+*.hdf5
+
+# Generated visualizations / local reports
+summary_plots/
+test_save/
+img_save/
+att_save/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

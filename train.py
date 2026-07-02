@@ -2,6 +2,9 @@ import os
 import cv2
 import numpy as np
 import wandb
+import argparse
+import csv
+import json
 
 from tqdm import tqdm
 
@@ -12,19 +15,82 @@ from model.trainers.trainer import Trainer
 from dataset.dataset_ImagePair import ImagePairDataset
 from logger import TrainingLogger
 
-code_name = 'Dataset_OHAZE'
-root_dir = f'./dataset/Dataset_OHAZE'
-cfg_path = f'./config/Dataset_OHAZE.yaml'
+parser = argparse.ArgumentParser()
+parser.add_argument('--config', default='./config/Dataset_OHAZE.yaml')
+args_cli = parser.parse_args()
+
+cfg_path = args_cli.config
 
 wandb_project = 'TESIS_PAPER'
 
 args = get_config(cfg_path)
 args['cfg_path'] = cfg_path
 
+code_name = args['job_name']
+root_dir = args.get('root_dir', f'./dataset/{code_name}')
 resume = args['resume']
 img_size = (args['img_h'],args['img_w']) #OpenCV
 batch_size = args['batch_size']
 wandb_key = args['wandb']
+val_freq = args.get('val_freq', 10)
+test_freq = args.get('test_freq', 10)
+
+
+def has_split(root, phase):
+    return (
+        os.path.isdir(os.path.join(root, f'{phase}A')) and
+        os.path.isdir(os.path.join(root, f'{phase}B'))
+    )
+
+
+def append_metrics_csv(path, row):
+    exists = os.path.exists(path)
+    with open(path, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=row.keys())
+        if not exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def write_metrics_summary(path, summary):
+    with open(path, 'w') as f:
+        json.dump(summary, f, indent=2)
+
+
+def evaluate_loader(trainer, loader, epoch, split_name, metrics_path, summary_path):
+    print(f'\n\nValidating on {split_name} set ......')
+    avg_psnr = []
+    avg_ssim = []
+    eval_bar = tqdm(enumerate(loader),
+                    total=len(loader),
+                    desc=f"{split_name} Epoch {epoch}")
+
+    for batch_id, (source_image, style_image, gt_image) in eval_bar:
+        psnr, ssim = trainer.test(
+            epoch,
+            batch_id,
+            source_image,
+            style_image,
+            gt_image,
+            len_data=len(loader),
+            suffix=split_name,
+        )
+        avg_psnr.append(psnr)
+        avg_ssim.append(ssim)
+
+    mean_psnr = sum(avg_psnr) / len(avg_psnr)
+    mean_ssim = sum(avg_ssim) / len(avg_ssim)
+    row = {
+        'epoch': epoch,
+        'split': split_name,
+        'psnr': mean_psnr,
+        'ssim': mean_ssim,
+    }
+    append_metrics_csv(metrics_path, row)
+    write_metrics_summary(summary_path, row)
+
+    print(f"\nEpoch: {epoch} - {split_name.upper()} Avg PSNR: {mean_psnr:.4f}, Avg SSIM: {mean_ssim:.4f} ")
+    return mean_psnr, mean_ssim
 
 if wandb_key is not None:
     print(f'\n\nSetting up wandb\n\n')
@@ -42,7 +108,7 @@ train_dataset_mixed = ImagePairDataset(root_dir=root_dir,
                                         augment=args['aug'],
                                         stage=args['stage'],
                                         img_size=img_size,
-                                        pairing='mix')
+                                        pairing=args.get('train_pairing', 'mix'))
 
 test_dataset_mixed = ImagePairDataset(root_dir=root_dir, 
                                         phase='test',
@@ -50,12 +116,28 @@ test_dataset_mixed = ImagePairDataset(root_dir=root_dir,
                                         return_gt=True,
                                         stage=args['stage'],
                                         img_size=img_size,
-                                        pairing='direct',
+                                        pairing=args.get('test_pairing', 'direct'),
+                                        )
+
+val_dataset_mixed = None
+if has_split(root_dir, 'val'):
+    val_dataset_mixed = ImagePairDataset(root_dir=root_dir,
+                                        phase='val',
+                                        augment=False,
+                                        return_gt=True,
+                                        stage=args['stage'],
+                                        img_size=img_size,
+                                        pairing=args.get('val_pairing', args.get('test_pairing', 'direct')),
                                         )
 
 print(f'\n\nTrain Dataset : {len(train_dataset_mixed)}')
+if val_dataset_mixed is not None:
+    print(f'Val Dataset : {len(val_dataset_mixed)}')
 print(f'Test Dataset : {len(test_dataset_mixed)}\n\n')
 train_loader_mixed = DataLoader(train_dataset_mixed, batch_size=batch_size, shuffle=True, num_workers=2)
+val_loader_mixed = None
+if val_dataset_mixed is not None:
+    val_loader_mixed = DataLoader(val_dataset_mixed, batch_size=batch_size, shuffle=False, num_workers=2)
 test_loader_mixed = DataLoader(test_dataset_mixed, batch_size=batch_size, shuffle=False, num_workers=2)
 
 print('attention:',args['attention'])
@@ -69,6 +151,10 @@ if resume is not None:
   trainer.load_model(resume,flow_only=False)
 
 training_logger = TrainingLogger(trainer.log_path)
+validation_metrics_path = os.path.join(trainer.log_path, 'validation_metrics.csv')
+validation_summary_path = os.path.join(trainer.log_path, 'validation_latest.json')
+test_metrics_path = os.path.join(trainer.log_path, 'test_metrics.csv')
+test_summary_path = os.path.join(trainer.log_path, 'test_latest.json')
 
 for epoch in range(args['total_epoch']):
     progress_bar = tqdm(enumerate(train_loader_mixed),
@@ -107,27 +193,43 @@ for epoch in range(args['total_epoch']):
 
     print(f"\nEpoch: {epoch} - Last Batch Loss: {last_loss:.4f}")
 
-    if epoch%10 == 0:
-      print('\n\nTesting on test set ......')
-      avg_psnr = []
-      avg_ssim = []
-      test_bar = tqdm(enumerate(test_loader_mixed),
-                        total=len(test_loader_mixed),
-                        desc=f"Epoch {epoch}")
-      for batch_id, (source_image, style_image, gt_image) in test_bar:
-          psnr,ssim = trainer.test(epoch, batch_id, source_image,style_image, gt_image, len_data=len(test_loader_mixed))
-          avg_psnr.append(psnr)
-          avg_ssim.append(ssim)
-
-      avg_psnr = sum(avg_psnr)/len(avg_psnr)
-      avg_ssim = sum(avg_ssim)/len(avg_ssim)
-
-      print(f"\nEpoch: {epoch} - TEST Avg PSNR: {avg_psnr:.4f}, Avg SSIM: {avg_ssim:.4f} ")
+    if val_loader_mixed is not None and val_freq > 0 and epoch % val_freq == 0:
+      val_psnr, val_ssim = evaluate_loader(
+          trainer,
+          val_loader_mixed,
+          epoch,
+          'val',
+          validation_metrics_path,
+          validation_summary_path,
+      )
       if wandb_key is not None:
           wandb.log({
-              'test/psnr': avg_psnr,
-              'test/ssim': avg_ssim
+              'val/psnr': val_psnr,
+              'val/ssim': val_ssim
+          }, step=epoch)
+      trainer.save_model(
+          f'epoch_{epoch:03d}_val',
+          epoch=epoch,
+          metrics={'val_psnr': val_psnr, 'val_ssim': val_ssim},
+      )
+
+    if test_freq > 0 and epoch % test_freq == 0:
+      test_psnr, test_ssim = evaluate_loader(
+          trainer,
+          test_loader_mixed,
+          epoch,
+          'test',
+          test_metrics_path,
+          test_summary_path,
+      )
+      if wandb_key is not None:
+          wandb.log({
+              'test/psnr': test_psnr,
+              'test/ssim': test_ssim
           },step=epoch)
+
+    trainer.step_lr_scheduler()
+    print(f"Learning rate after epoch {epoch}: {trainer.get_lr():.8f}")
 
     print('\n\n')
 

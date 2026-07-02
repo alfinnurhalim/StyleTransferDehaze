@@ -10,6 +10,7 @@ import gdown
 import torch
 import torch.nn as nn
 from torchvision.utils import save_image
+from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
 
 import model.network.net as net
 from model.network.glow import Glow
@@ -53,12 +54,34 @@ def get_gradients_loss(I, R):
     )
 
 def load_vgg_weights(cfg, vgg):
-    vgg_drive_url = '15CeUI3FMgSFGSUPAldAzGAWAhMNL5iIO'
+    vgg_drive_id = cfg.get('vgg_drive_id', '15CeUI3FMgSFGSUPAldAzGAWAhMNL5iIO')
+    vgg_url = cfg.get('vgg_url')
     vgg_local_path = cfg.get('vgg')
 
-    if not vgg_local_path or not os.path.exists(vgg_local_path):
-        print("VGG model weights not found. Downloading from Google Drive...")
-        gdown.download(id=vgg_drive_url, output=vgg_local_path, quiet=False)
+    if not vgg_local_path:
+        raise ValueError(
+            "Missing VGG weights path. Set `vgg: ./vgg_normalised.pth` "
+            "or another local path in the config."
+        )
+
+    if not os.path.exists(vgg_local_path):
+        print(f"VGG model weights not found at {vgg_local_path}. Downloading...")
+        try:
+            if vgg_url:
+                gdown.download(url=vgg_url, output=vgg_local_path, quiet=False, fuzzy=True)
+            else:
+                gdown.download(id=vgg_drive_id, output=vgg_local_path, quiet=False)
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not download VGG weights automatically.\n"
+                f"Expected local file: {vgg_local_path}\n"
+                f"Google Drive id: {vgg_drive_id}\n"
+                "Manual fix: download vgg_normalised.pth in a browser and place it at "
+                f"{vgg_local_path}, or set `vgg` to the downloaded file path in the config. "
+                "If you have a direct mirror, set `vgg_url` in the config."
+            ) from exc
+
+    print(f"Loading VGG weights from {vgg_local_path}")
 
     # Load weights into the existing model instance
     vgg.load_state_dict(torch.load(vgg_local_path))
@@ -114,12 +137,28 @@ class Trainer:
         # Merge model and optimizer
         self.model = merge_model(cfg).cuda()
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=cfg['lr'])
-        self.lr_scheduler = IterLRScheduler(
-            self.optimizer,
-            cfg.get('lr_steps', []),
-            cfg.get('lr_mults', []),
-            last_iter=cfg.get('last_iter', 0)
-        )
+        self.lr_scheduler_mode = cfg.get('lr_scheduler', 'iter_multistep')
+        if self.lr_scheduler_mode == 'cosine':
+            self.lr_scheduler = CosineAnnealingLR(
+                self.optimizer,
+                T_max=cfg.get('total_epoch', 1),
+                eta_min=cfg.get('lr_min', cfg['lr'] * 0.1),
+            )
+        elif self.lr_scheduler_mode == 'epoch_multistep':
+            lr_mults = cfg.get('lr_mults', 0.5)
+            gamma = lr_mults[0] if isinstance(lr_mults, list) else lr_mults
+            self.lr_scheduler = MultiStepLR(
+                self.optimizer,
+                milestones=cfg.get('lr_epoch_steps', cfg.get('lr_steps', [])),
+                gamma=gamma,
+            )
+        else:
+            self.lr_scheduler = IterLRScheduler(
+                self.optimizer,
+                cfg.get('lr_steps', []),
+                cfg.get('lr_mults', 0.5),
+                last_iter=cfg.get('last_iter', 0)
+            )
 
         # Content encoder (VGG) & Style encoder
         # Load pretrained VGG from torchvision
@@ -176,6 +215,26 @@ class Trainer:
             self.optimizer.load_state_dict(ckpt['optimizer'])
             print("Optimizer state loaded\n")
 
+    def save_model(self, filename, epoch=None, metrics=None):
+        state = {
+            'state_dict': self.model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+        }
+        if epoch is not None:
+            state['epoch'] = epoch
+        if metrics is not None:
+            state['metrics'] = metrics
+        if hasattr(self.lr_scheduler, 'state_dict'):
+            state['lr_scheduler'] = self.lr_scheduler.state_dict()
+        save_checkpoint(state, os.path.join(self.model_log_path, filename))
+
+    def get_lr(self):
+        return self.optimizer.param_groups[0]['lr']
+
+    def step_lr_scheduler(self):
+        if self.lr_scheduler_mode != 'iter_multistep':
+            self.lr_scheduler.step()
+
 
     def train(self, batch_id, content_imgs, style_imgs, epoch):
         content = content_imgs.cuda()
@@ -207,7 +266,8 @@ class Trainer:
         self.optimizer.zero_grad()
         total_loss.backward()
         self.optimizer.step()
-        self.lr_scheduler.step()
+        if self.lr_scheduler_mode == 'iter_multistep':
+            self.lr_scheduler.step()
 
         # Logging
         if batch_id % self.cfg.get('log_freq', 100) == 0:
@@ -243,6 +303,7 @@ class Trainer:
             loss_scm.item()
         ]
 
+    @torch.no_grad()
     def test(self, epoch, batch_id, content_imgs, style_imgs, gt_imgs, len_data=1000, suffix=''):
         content = content_imgs.cuda()
         style = style_imgs.cuda()
