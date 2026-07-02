@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pandas as pd
+import torch
 from tqdm import tqdm
 
 from torch.utils.data import DataLoader
@@ -56,9 +57,23 @@ def append_metrics_csv(path, row):
         writer.writerow(row)
 
 
+def to_jsonable(value):
+    if isinstance(value, dict):
+        return {k: to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [to_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [to_jsonable(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().item() if value.numel() == 1 else value.detach().cpu().tolist()
+    return value
+
+
 def write_metrics_summary(path, summary):
     with open(path, 'w') as f:
-        json.dump(summary, f, indent=2)
+        json.dump(to_jsonable(summary), f, indent=2)
 
 
 def mean_losses(loss_rows):
@@ -145,8 +160,8 @@ def evaluate_loader(trainer, loader, epoch, split_name, metrics_path, summary_pa
         avg_psnr.append(psnr)
         avg_ssim.append(ssim)
 
-    mean_psnr = sum(avg_psnr) / len(avg_psnr)
-    mean_ssim = sum(avg_ssim) / len(avg_ssim)
+    mean_psnr = float(sum(avg_psnr) / len(avg_psnr))
+    mean_ssim = float(sum(avg_ssim) / len(avg_ssim))
     row = {
         'epoch': epoch,
         'split': split_name,
